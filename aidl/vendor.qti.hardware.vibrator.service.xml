@@ -30,5 +30,11 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
         <name>android.hardware.vibrator</name>
         <version>2</version>
         <fqname>IVibrator/default</fqname>
+        <fqname>IVibrator/hentak</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>vendor.yasvara.hentak</name>
+        <version>1</version>
+        <fqname>ITagger/default</fqname>
     </hal>
 </manifest>

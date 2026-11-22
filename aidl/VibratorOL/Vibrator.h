@@ -37,6 +37,8 @@
 #include <thread>
 #include <mutex>
 
+#include "StreamPlayer.h"
+
 namespace aidl {
 namespace android {
 namespace hardware {
@@ -143,7 +145,11 @@ private:
     static void composePlayThread(VibratorOL *vibrator,
                         const std::vector<CompositeEffect>& composite,
                         const std::shared_ptr<IVibratorCallback>& callback);
+    // The bank wave a prebaked effect streams as, or 0 when it plays the usual way.
+    int textureForEffect(Effect effect);
     std::thread composeThread;
+    // Primitives, live-amplitude on() and the game haptics drive, when the stream device exists.
+    StreamPlayer mStream;
     int epollfd;
     int pipefd[2];
     std::atomic<bool> inComposition;

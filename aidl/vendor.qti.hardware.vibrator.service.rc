@@ -3,6 +3,8 @@ service vendor.qti.vibrator /vendor/bin/hw/vendor.qti.hardware.vibrator.service
     user system
     group system input wakelock
     capabilities BLOCK_SUSPEND
+    # Hentak's tagger: QNN 2.42 dlopens its own stub by name; onyx's 2.29 lives in /vendor/lib64.
+    setenv LD_LIBRARY_PATH /vendor/lib64/hentak
 
 on late-init
     write /sys/class/leds/vibrator/trigger "transient"

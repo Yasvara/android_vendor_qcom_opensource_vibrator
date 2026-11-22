@@ -47,6 +47,10 @@ public:
     Vibrator();
     ~Vibrator();
 
+    // The "hentak" instance for game haptics from audio; null without the stream device. Call
+    // after constructing the default instance, which owns the stream.
+    static std::shared_ptr<BnVibrator> hentakFollower();
+
     ndk::ScopedAStatus getCapabilities(int32_t* _aidl_return) override;
     ndk::ScopedAStatus off() override;
     ndk::ScopedAStatus on(int32_t timeoutMs,

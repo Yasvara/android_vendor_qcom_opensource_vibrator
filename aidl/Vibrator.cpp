@@ -39,6 +39,7 @@
 #include <unistd.h>
 
 #include "Vibrator.h"
+#include "VibratorOL/HentakFollower.h"
 #include "VibratorOL/Vibrator.h"
 #ifdef USE_LIBPALCLIENT
 #include "VibratorCL/Vibrator.h"
@@ -284,6 +285,14 @@ public:
         VibratorSelectionLock.unlock();
         return status;
     }
+
+    ndk::ScopedAStatus alwaysOnEnable(int32_t id, Effect effect, EffectStrength strength) {
+        return mVibratorOL.alwaysOnEnable(id, effect, strength);
+    }
+
+    ndk::ScopedAStatus alwaysOnDisable(int32_t id) {
+        return mVibratorOL.alwaysOnDisable(id);
+    }
 };
 
 
@@ -353,13 +362,12 @@ ndk::ScopedAStatus Vibrator::getSupportedAlwaysOnEffects(std::vector<Effect>* _a
     return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
 }
 
-ndk::ScopedAStatus Vibrator::alwaysOnEnable(int32_t id __unused, Effect effect __unused,
-    EffectStrength strength __unused) {
-    return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+ndk::ScopedAStatus Vibrator::alwaysOnEnable(int32_t id, Effect effect, EffectStrength strength) {
+    return pImpl->alwaysOnEnable(id, effect, strength);
 }
 
-ndk::ScopedAStatus Vibrator::alwaysOnDisable(int32_t id __unused) {
-    return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+ndk::ScopedAStatus Vibrator::alwaysOnDisable(int32_t id) {
+    return pImpl->alwaysOnDisable(id);
 }
 
 ndk::ScopedAStatus Vibrator::getResonantFrequency(float* resonantFreqHz __unused) {
@@ -397,6 +405,10 @@ ndk::ScopedAStatus Vibrator::getSupportedBraking(std::vector<Braking>* supported
 ndk::ScopedAStatus Vibrator::composePwle(const std::vector<PrimitivePwle>& composite __unused,
     const std::shared_ptr<IVibratorCallback>& callback __unused) {
     return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+}
+
+std::shared_ptr<BnVibrator> Vibrator::hentakFollower() {
+    return makeHentakFollower();
 }
 
 }  // namespace vibrator

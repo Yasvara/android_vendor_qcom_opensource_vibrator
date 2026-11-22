@@ -6,6 +6,9 @@ cc_library_shared {
         default: [],
     }),
     srcs: [
+        "HentakFollower.cpp",
+        "StreamPlayer.cpp",
+        "TextureBank.cpp",
         "Vibrator.cpp",
         "VibratorOffload.cpp",
     ],

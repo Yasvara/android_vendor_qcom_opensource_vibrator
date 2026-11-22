@@ -37,12 +37,15 @@
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 
+#include "Tagger.h"
 #include "Vibrator.h"
 
+using aidl::android::hardware::vibrator::BnVibrator;
 using aidl::android::hardware::vibrator::Vibrator;
 
 int main() {
-    ABinderProcess_setThreadPoolMaxThreadCount(0);
+    // Three services (default, hentak at 200 Hz, tagger): one slow call must not starve the rest.
+    ABinderProcess_setThreadPoolMaxThreadCount(4);
     ABinderProcess_startThreadPool();
 
     std::shared_ptr<Vibrator> vib = ndk::SharedRefBase::make<Vibrator>();
@@ -50,6 +53,24 @@ int main() {
     const std::string instance = std::string() + Vibrator::descriptor + "/default";
     binder_status_t status = AServiceManager_addService(vib->asBinder().get(), instance.c_str());
     CHECK(status == STATUS_OK);
+
+    // Optional: game haptics still work through the default instance without it.
+    if (std::shared_ptr<BnVibrator> hentak = Vibrator::hentakFollower()) {
+        const std::string name = std::string() + Vibrator::descriptor + "/hentak";
+        if (AServiceManager_addService(hentak->asBinder().get(), name.c_str()) != STATUS_OK) {
+            LOG(WARNING) << "Could not register " << name;
+        }
+    }
+
+    // Optional too: Hentak's learned tagger, when its model is installed.
+    if (std::shared_ptr<aidl::vendor::yasvara::hentak::Tagger> tagger =
+                aidl::vendor::yasvara::hentak::Tagger::create()) {
+        const std::string name =
+                std::string() + aidl::vendor::yasvara::hentak::Tagger::descriptor + "/default";
+        if (AServiceManager_addService(tagger->asBinder().get(), name.c_str()) != STATUS_OK) {
+            LOG(WARNING) << "Could not register " << name;
+        }
+    }
 
     ABinderProcess_joinThreadPool();
     return EXIT_FAILURE;  // should not reach

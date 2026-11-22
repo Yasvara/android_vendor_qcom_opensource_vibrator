@@ -46,9 +46,13 @@ cc_binary {
         "libutils",
         "libbase",
         "libbinder_ndk",
+        "libdl",
+        "liblog",
         "android.hardware.vibrator-V2-ndk",
         "vendor.qti.hardware.vibrator.impl",
+        "vendor.yasvara.hentak-V1-ndk",
     ],
+    static_libs: ["libhentak_tagger"],
 }
 
 cc_fuzz {

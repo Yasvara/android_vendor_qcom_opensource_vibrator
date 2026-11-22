@@ -590,6 +590,8 @@ ndk::ScopedAStatus VibratorOL::getCapabilities(int32_t* _aidl_return) {
     }
     if (ff.mSupportExternalControl)
         *_aidl_return |= IVibrator::CAP_EXTERNAL_CONTROL;
+    if (mStream.ready())
+        *_aidl_return |= IVibrator::CAP_COMPOSE_EFFECTS | IVibrator::CAP_AMPLITUDE_CONTROL;
 
     ALOGD("QTI Vibrator reporting capabilities: %d", *_aidl_return);
     return ndk::ScopedAStatus::ok();
@@ -600,6 +602,8 @@ ndk::ScopedAStatus VibratorOL::off() {
     int composeEven = STOP_COMPOSE;
 
     ALOGD("QTI Vibrator off");
+    if (mStream.ready())
+        mStream.stop();
     if (ledVib.mDetected)
         ret = ledVib.off();
     else
@@ -628,6 +632,12 @@ ndk::ScopedAStatus VibratorOL::on(int32_t timeoutMs,
     }
 
     ALOGD("Vibrator on for timeoutMs: %d", timeoutMs);
+    if (mStream.ready() && !ledVib.mDetected) {
+        mStream.playCarrier(timeoutMs, [callback] {
+            if (callback != nullptr) callback->onComplete();
+        });
+        return ndk::ScopedAStatus::ok();
+    }
     if (ledVib.mDetected)
         ret = ledVib.on(timeoutMs);
     else
@@ -659,6 +669,21 @@ ndk::ScopedAStatus VibratorOL::perform(Effect effect, EffectStrength es, const s
 
     ALOGD("Vibrator perform effect %d", effect);
 
+    // RINGTONE_1..5 are the bank's waves 7..11, past what the kernel plays from RAM (0-9, and
+    // effect 10 would go to an absent RTP file), so they stream.
+    if (const int wave = textureForEffect(effect); wave > 0) {
+        if (es != EffectStrength::LIGHT && es != EffectStrength::MEDIUM && es != EffectStrength::STRONG)
+            return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+        const float scale = es == EffectStrength::LIGHT ? 0.5f
+                            : es == EffectStrength::MEDIUM ? 0.75f
+                                                           : 1.f;
+        mStream.playTexture(wave, scale, [callback] {
+            if (callback != nullptr) callback->onComplete();
+        });
+        *_aidl_return = mStream.textures().durationMs(wave) + 5;
+        return ndk::ScopedAStatus::ok();
+    }
+
     if (Offload.mEnabled == 1) {
          if ((effect < Effect::CLICK) ||
              ((effect > Effect::HEAVY_CLICK) && (effect < Effect::RINGTONE_12)) ||
@@ -675,9 +700,13 @@ ndk::ScopedAStatus VibratorOL::perform(Effect effect, EffectStrength es, const s
     if (es != EffectStrength::LIGHT && es != EffectStrength::MEDIUM && es != EffectStrength::STRONG)
         return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
 
+    if (mStream.ready())
+        mStream.stop();
     ret = ff.playEffect((static_cast<int>(effect)), es, &playLengthMs);
     if (ret != 0)
         return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_SERVICE_SPECIFIC));
+    if (mStream.ready())
+        mStream.holdFollow(static_cast<int32_t>(playLengthMs) + 10);
 
     if (callback != nullptr) {
         std::thread([=] {
@@ -690,6 +719,13 @@ ndk::ScopedAStatus VibratorOL::perform(Effect effect, EffectStrength es, const s
 
     *_aidl_return = playLengthMs;
     return ndk::ScopedAStatus::ok();
+}
+
+int VibratorOL::textureForEffect(Effect effect) {
+    if (ledVib.mDetected || !mStream.ready()) return 0;
+    if (effect < Effect::RINGTONE_1 || effect > Effect::RINGTONE_5) return 0;
+    const int wave = static_cast<int>(effect) + 1;
+    return mStream.textures().has(wave) ? wave : 0;
 }
 
 ndk::ScopedAStatus VibratorOL::getSupportedEffects(std::vector<Effect>* _aidl_return) {
@@ -705,6 +741,11 @@ ndk::ScopedAStatus VibratorOL::getSupportedEffects(std::vector<Effect>* _aidl_re
 #ifndef USE_EFFECT_STREAM
         *_aidl_return = {Effect::CLICK, Effect::DOUBLE_CLICK, Effect::TICK, Effect::THUD,
                          Effect::POP, Effect::HEAVY_CLICK};
+        for (int32_t id = static_cast<int32_t>(Effect::RINGTONE_1);
+             id <= static_cast<int32_t>(Effect::RINGTONE_5); id++) {
+            if (textureForEffect(static_cast<Effect>(id)))
+                _aidl_return->push_back(static_cast<Effect>(id));
+        }
 #else
     for (int32_t effectId = static_cast<int32_t>(Effect::CLICK);
          effectId <= static_cast<int32_t>(Effect::TEXTURE_TICK);
@@ -738,6 +779,11 @@ ndk::ScopedAStatus VibratorOL::setAmplitude(float amplitude) {
     if (ff.mInExternalControl)
         return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
 
+    if (mStream.ready()) {
+        mStream.setAmplitude(amplitude);
+        return ndk::ScopedAStatus::ok();
+    }
+
     tmp = (uint8_t)(amplitude * 0xff);
     ret = ff.setAmplitude(tmp);
     if (ret != 0)
@@ -769,6 +815,19 @@ ndk::ScopedAStatus VibratorOL::getCompositionSizeMax(int32_t* maxSize) {
 }
 
 ndk::ScopedAStatus VibratorOL::getSupportedPrimitives(std::vector<CompositePrimitive>* supported) {
+    if (mStream.ready()) {
+        *supported = {
+            CompositePrimitive::NOOP,       CompositePrimitive::CLICK,
+            CompositePrimitive::THUD,       CompositePrimitive::SPIN,
+            CompositePrimitive::QUICK_RISE, CompositePrimitive::SLOW_RISE,
+            CompositePrimitive::QUICK_FALL, CompositePrimitive::LIGHT_TICK,
+            CompositePrimitive::LOW_TICK,
+        };
+        for (int wave = 1; wave <= mStream.textures().count(); wave++) {
+            supported->push_back(static_cast<CompositePrimitive>(StreamPlayer::kTextureBase + wave));
+        }
+        return ndk::ScopedAStatus::ok();
+    }
 #ifndef USE_EFFECT_STREAM
     *supported =  {
         CompositePrimitive::NOOP,   CompositePrimitive::CLICK,
@@ -857,6 +916,11 @@ ndk::ScopedAStatus VibratorOL::getPrimitiveDuration(CompositePrimitive primitive
                                                   int32_t* durationMs) {
     uint32_t primitive_id = static_cast<uint32_t>(primitive);
     int ret = 0;
+
+    if (mStream.ready()) {
+        *durationMs = mStream.primitiveDurationMs(primitive);
+        return ndk::ScopedAStatus::ok();
+    }
 
 #ifdef USE_EFFECT_STREAM
     primitive_id |= PRIMITIVE_ID_MASK ;
@@ -991,6 +1055,13 @@ ndk::ScopedAStatus VibratorOL::compose(const std::vector<CompositeEffect>& compo
         timeoutMs += durationMs + e.delayMs;
     }
 
+    if (mStream.ready()) {
+        mStream.playComposition(composite, [callback] {
+            if (callback) callback->onComplete();
+        });
+        return ndk::ScopedAStatus::ok();
+    }
+
     /*
      * wait for 2 times of the play length timeout to make sure last play has been
      * terminated successfully.
@@ -1033,13 +1104,45 @@ ndk::ScopedAStatus VibratorOL::getSupportedAlwaysOnEffects(std::vector<Effect>* 
     return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
 }
 
-ndk::ScopedAStatus VibratorOL::alwaysOnEnable(int32_t id __unused, Effect effect __unused,
-                                            EffectStrength strength __unused) {
-    return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+// No always-on effects (CAP_ALWAYS_ON_CONTROL is never reported). The ids are private channels
+// from system_server instead: StreamPlayer::kDriveId, the game haptics drive level (Hentak);
+// StreamPlayer::kReskinId + primitive, the texture that primitive plays (Raba; effect = wave); and
+// StreamPlayer::kBoostId, the texture boost (Raba; effect = 0..100).
+static bool isReskinId(int32_t id) {
+    return id > StreamPlayer::kReskinId && id < StreamPlayer::kReskinId + StreamPlayer::kReskinCount;
 }
 
-ndk::ScopedAStatus VibratorOL::alwaysOnDisable(int32_t id __unused) {
-    return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+ndk::ScopedAStatus VibratorOL::alwaysOnEnable(int32_t id, Effect effect,
+                                            EffectStrength strength) {
+    if (mStream.ready() && isReskinId(id)) {
+        mStream.setReskin(id - StreamPlayer::kReskinId, static_cast<int>(effect));
+        return ndk::ScopedAStatus::ok();
+    }
+    if (mStream.ready() && id == StreamPlayer::kBoostId) {
+        mStream.setTextureBoost(static_cast<int>(effect) / 100.f);
+        return ndk::ScopedAStatus::ok();
+    }
+    if (id != StreamPlayer::kDriveId || !mStream.ready())
+        return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+    mStream.setDrive(strength == EffectStrength::STRONG ? StreamPlayer::Drive::STRONG
+                     : strength == EffectStrength::MEDIUM ? StreamPlayer::Drive::FIRM
+                                                          : StreamPlayer::Drive::NORMAL);
+    return ndk::ScopedAStatus::ok();
+}
+
+ndk::ScopedAStatus VibratorOL::alwaysOnDisable(int32_t id) {
+    if (mStream.ready() && isReskinId(id)) {
+        mStream.setReskin(id - StreamPlayer::kReskinId, 0);
+        return ndk::ScopedAStatus::ok();
+    }
+    if (mStream.ready() && id == StreamPlayer::kBoostId) {
+        mStream.setTextureBoost(0);
+        return ndk::ScopedAStatus::ok();
+    }
+    if (id != StreamPlayer::kDriveId || !mStream.ready())
+        return ndk::ScopedAStatus(AStatus_fromExceptionCode(EX_UNSUPPORTED_OPERATION));
+    mStream.setDrive(StreamPlayer::Drive::NORMAL);
+    return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus VibratorOL::getResonantFrequency(float *resonantFreqHz __unused) {
